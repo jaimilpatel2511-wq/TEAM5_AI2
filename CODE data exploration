@@ -1,0 +1,101 @@
+# ============================================================
+# BRANCH 1: data-exploration
+# Task: Load and Explore the Dataset
+# Dataset: California Housing Dataset (sklearn built-in)
+# Team Role: Data Exploration Team
+# ============================================================
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.datasets import fetch_california_housing
+
+# ── 1. Load Dataset ─────────────────────────────────────────
+housing = fetch_california_housing(as_frame=True)
+df = housing.frame                         # Full DataFrame (features + target)
+print("✅ Dataset loaded successfully!\n")
+
+# ── 2. Basic Info ────────────────────────────────────────────
+print("=" * 55)
+print("📋 DATASET OVERVIEW")
+print("=" * 55)
+print(f"Shape        : {df.shape[0]} rows × {df.shape[1]} columns")
+print(f"Features     : {list(housing.feature_names)}")
+print(f"Target       : MedHouseVal (Median House Value in $100k)\n")
+
+print("─" * 55)
+print("📌 First 5 Rows:")
+print(df.head().to_string())
+
+print("\n─" * 55)
+print("📌 Data Types:")
+print(df.dtypes.to_string())
+
+# ── 3. Statistical Summary ───────────────────────────────────
+print("\n" + "=" * 55)
+print("📊 STATISTICAL SUMMARY")
+print("=" * 55)
+print(df.describe().round(3).to_string())
+
+# ── 4. Missing Values ────────────────────────────────────────
+print("\n" + "=" * 55)
+print("🔍 MISSING VALUES CHECK")
+print("=" * 55)
+missing = df.isnull().sum()
+missing_pct = (df.isnull().mean() * 100).round(2)
+missing_report = pd.DataFrame({"Missing Count": missing, "Missing %": missing_pct})
+print(missing_report[missing_report["Missing Count"] > 0].to_string()
+      if missing.sum() > 0 else "✅ No missing values found!")
+
+# ── 5. Target Variable Distribution ─────────────────────────
+print("\n" + "=" * 55)
+print("🎯 TARGET VARIABLE — MedHouseVal")
+print("=" * 55)
+print(f"  Min    : {df['MedHouseVal'].min():.4f}")
+print(f"  Max    : {df['MedHouseVal'].max():.4f}")
+print(f"  Mean   : {df['MedHouseVal'].mean():.4f}")
+print(f"  Median : {df['MedHouseVal'].median():.4f}")
+print(f"  Std Dev: {df['MedHouseVal'].std():.4f}")
+print(f"  Skew   : {df['MedHouseVal'].skew():.4f}  (>0 = right-skewed)")
+
+# ── 6. Correlation Matrix ────────────────────────────────────
+print("\n" + "=" * 55)
+print("🔗 CORRELATION WITH TARGET (MedHouseVal)")
+print("=" * 55)
+corr = df.corr()["MedHouseVal"].drop("MedHouseVal").sort_values(ascending=False)
+for feat, val in corr.items():
+    bar = "█" * int(abs(val) * 20)
+    sign = "+" if val >= 0 else "-"
+    print(f"  {feat:<12}: {sign}{abs(val):.4f}  {bar}")
+
+# ── 7. Visualisations ────────────────────────────────────────
+fig, axes = plt.subplots(3, 3, figsize=(16, 12))
+fig.suptitle("📊 California Housing — Exploratory Data Analysis",
+             fontsize=16, fontweight="bold", y=1.01)
+axes = axes.flatten()
+
+cols = housing.feature_names + ["MedHouseVal"]
+for i, col in enumerate(cols):
+    axes[i].hist(df[col], bins=40, color="#4A90D9", edgecolor="white", alpha=0.85)
+    axes[i].set_title(col, fontsize=11, fontweight="bold")
+    axes[i].set_ylabel("Frequency")
+    axes[i].grid(axis="y", linestyle="--", alpha=0.4)
+
+plt.tight_layout()
+plt.savefig("eda_feature_distributions.png", dpi=150, bbox_inches="tight")
+print("\n💾 Saved: eda_feature_distributions.png")
+
+# Correlation heatmap
+fig2, ax2 = plt.subplots(figsize=(10, 8))
+sns.heatmap(df.corr(), annot=True, fmt=".2f", cmap="coolwarm",
+            linewidths=0.5, ax=ax2, cbar_kws={"shrink": 0.8})
+ax2.set_title("Feature Correlation Heatmap", fontsize=14, fontweight="bold")
+plt.tight_layout()
+plt.savefig("eda_correlation_heatmap.png", dpi=150, bbox_inches="tight")
+print("💾 Saved: eda_correlation_heatmap.png")
+
+# Save clean data for next branch
+df.to_csv("raw_dataset.csv", index=False)
+print("\n💾 Saved raw_dataset.csv → ready for Branch 2 (preprocessing)")
+print("\n✅ Branch 1 — Data Exploration COMPLETE")
