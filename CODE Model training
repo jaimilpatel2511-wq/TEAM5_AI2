@@ -1,0 +1,142 @@
+# ============================================================
+# BRANCH 3: model-training
+# Task: Train a Linear Regression model
+# Team Role: Model Training Team
+# ============================================================
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import joblib
+from sklearn.linear_model import LinearRegression
+from sklearn.datasets import fetch_california_housing
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import StandardScaler
+from sklearn.impute import SimpleImputer
+import warnings
+warnings.filterwarnings("ignore")
+
+# ── 1. Load Pre-processed Data ───────────────────────────────
+# In a full Git workflow, these CSVs come from Branch 2.
+# Here we reproduce the preprocessing pipeline so the script
+# runs independently.
+print("=" * 55)
+print("📥  STEP 1 — LOADING PRE-PROCESSED DATA")
+print("=" * 55)
+
+try:
+    X_train = pd.read_csv("X_train.csv")
+    X_test  = pd.read_csv("X_test.csv")
+    y_train = pd.read_csv("y_train.csv").squeeze()
+    y_test  = pd.read_csv("y_test.csv").squeeze()
+    print("  ✅ Loaded from Branch 2 CSV files.")
+except FileNotFoundError:
+    print("  ⚠️  Branch 2 CSVs not found — running inline preprocessing...")
+    housing = fetch_california_housing(as_frame=True)
+    df = housing.frame.copy()
+    np.random.seed(42)
+    for col in ["HouseAge", "AveRooms", "Population"]:
+        idx = np.random.choice(df.index, size=int(0.05 * len(df)), replace=False)
+        df.loc[idx, col] = np.nan
+    num_cols = df.select_dtypes(include=["float64", "int64"]).columns.tolist()
+    df[num_cols] = SimpleImputer(strategy="median").fit_transform(df[num_cols])
+    df["RoomsPerHousehold"]  = df["AveRooms"]  / df["HouseAge"].replace(0, np.nan)
+    df["BedroomsPerRoom"]    = df["AveBedrms"] / df["AveRooms"].replace(0, np.nan)
+    df["PopulationPerHouse"] = df["Population"]/ df["HouseAge"].replace(0, np.nan)
+    df.fillna(df.median(numeric_only=True), inplace=True)
+    X = df.drop(columns=["MedHouseVal"])
+    y = df["MedHouseVal"]
+    X_train_raw, X_test_raw, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42)
+    scaler = StandardScaler()
+    X_train = pd.DataFrame(scaler.fit_transform(X_train_raw), columns=X.columns)
+    X_test  = pd.DataFrame(scaler.transform(X_test_raw),      columns=X.columns)
+    print("  ✅ Inline preprocessing complete.")
+
+print(f"\n  X_train : {X_train.shape}  |  X_test : {X_test.shape}")
+print(f"  y_train : {y_train.shape}  |  y_test : {y_test.shape}")
+
+# ── 2. Train Linear Regression ───────────────────────────────
+print("\n" + "=" * 55)
+print("🏋️  STEP 2 — TRAINING LINEAR REGRESSION MODEL")
+print("=" * 55)
+model = LinearRegression()
+model.fit(X_train, y_train)
+print("  ✅ Model training complete!")
+
+# ── 3. Inspect Learned Parameters ───────────────────────────
+print("\n" + "=" * 55)
+print("🔎  STEP 3 — MODEL PARAMETERS")
+print("=" * 55)
+print(f"  Intercept (β₀) : {model.intercept_:.6f}")
+print("\n  Feature Coefficients (β₁ … βₙ):")
+coef_df = (pd.Series(model.coef_, index=X_train.columns)
+             .sort_values(ascending=False))
+for feat, coef in coef_df.items():
+    bar = "█" * int(min(abs(coef) * 8, 30))
+    sign = "+" if coef >= 0 else "-"
+    print(f"    {feat:<22}: {sign}{abs(coef):.4f}  {bar}")
+
+# ── 4. Cross-Validation ──────────────────────────────────────
+print("\n" + "=" * 55)
+print("🔁  STEP 4 — 5-FOLD CROSS-VALIDATION (on training set)")
+print("=" * 55)
+cv_scores = cross_val_score(model, X_train, y_train,
+                            cv=5, scoring="r2")
+cv_rmse   = np.sqrt(-cross_val_score(model, X_train, y_train,
+                                      cv=5, scoring="neg_mean_squared_error"))
+print(f"  R² scores   : {np.round(cv_scores, 4)}")
+print(f"  Mean R²     : {cv_scores.mean():.4f}  ± {cv_scores.std():.4f}")
+print(f"  RMSE scores : {np.round(cv_rmse, 4)}")
+print(f"  Mean RMSE   : {cv_rmse.mean():.4f}  ± {cv_rmse.std():.4f}")
+
+# ── 5. Predictions ───────────────────────────────────────────
+y_pred_train = model.predict(X_train)
+y_pred_test  = model.predict(X_test)
+
+# ── 6. Visualise: Actual vs Predicted ───────────────────────
+fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+fig.suptitle("Linear Regression — Actual vs Predicted",
+             fontsize=14, fontweight="bold")
+
+for ax, (y_true, y_pred, split) in zip(
+    axes,
+    [(y_train, y_pred_train, "Train"),
+     (y_test,  y_pred_test,  "Test")]
+):
+    ax.scatter(y_true, y_pred, alpha=0.3, s=12, color="#4A90D9")
+    mn = min(y_true.min(), y_pred.min())
+    mx = max(y_true.max(), y_pred.max())
+    ax.plot([mn, mx], [mn, mx], "r--", lw=1.5, label="Perfect Prediction")
+    ax.set_xlabel("Actual Values")
+    ax.set_ylabel("Predicted Values")
+    ax.set_title(f"{split} Set")
+    ax.legend()
+    ax.grid(alpha=0.3)
+
+plt.tight_layout()
+plt.savefig("model_actual_vs_predicted.png", dpi=150, bbox_inches="tight")
+print("\n💾 Saved: model_actual_vs_predicted.png")
+
+# ── 7. Residual Plot ─────────────────────────────────────────
+residuals = y_test - y_pred_test
+fig2, ax2 = plt.subplots(figsize=(8, 5))
+ax2.scatter(y_pred_test, residuals, alpha=0.3, s=12, color="#E74C3C")
+ax2.axhline(0, color="black", lw=1.5, linestyle="--")
+ax2.set_xlabel("Predicted Values")
+ax2.set_ylabel("Residuals")
+ax2.set_title("Residual Plot (Test Set)")
+ax2.grid(alpha=0.3)
+plt.tight_layout()
+plt.savefig("model_residuals.png", dpi=150, bbox_inches="tight")
+print("💾 Saved: model_residuals.png")
+
+# ── 8. Save Model & Predictions ──────────────────────────────
+joblib.dump(model, "linear_regression_model.pkl")
+pd.Series(y_pred_test,  name="y_pred_test") .to_csv("y_pred_test.csv",  index=False)
+pd.Series(y_pred_train, name="y_pred_train").to_csv("y_pred_train.csv", index=False)
+
+print("\n💾 Saved: linear_regression_model.pkl")
+print("💾 Saved: y_pred_test.csv, y_pred_train.csv")
+print("         → ready for Branch 4 (evaluation)")
+print("\n✅ Branch 3 — Model Training COMPLETE")
