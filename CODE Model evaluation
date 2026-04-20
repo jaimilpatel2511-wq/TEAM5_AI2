@@ -1,0 +1,210 @@
+# ============================================================
+# BRANCH 4: model-evaluation
+# Task: Evaluate model + optional improvement techniques
+# Team Role: Evaluation & Improvement Team
+# ============================================================
+
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import joblib
+import warnings
+warnings.filterwarnings("ignore")
+
+from sklearn.datasets import fetch_california_housing
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.preprocessing import StandardScaler, PolynomialFeatures
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LinearRegression, Ridge, Lasso
+from sklearn.pipeline import Pipeline
+from sklearn.metrics import (
+    mean_absolute_error, mean_squared_error,
+    r2_score, mean_absolute_percentage_error
+)
+
+# ── Helper ───────────────────────────────────────────────────
+def evaluate(name, y_true, y_pred):
+    mae  = mean_absolute_error(y_true, y_pred)
+    mse  = mean_squared_error(y_true, y_pred)
+    rmse = np.sqrt(mse)
+    r2   = r2_score(y_true, y_pred)
+    mape = mean_absolute_percentage_error(y_true, y_pred) * 100
+    print(f"\n  📌 {name}")
+    print(f"     MAE   : {mae:.4f}")
+    print(f"     MSE   : {mse:.4f}")
+    print(f"     RMSE  : {rmse:.4f}")
+    print(f"     R²    : {r2:.4f}  ({r2*100:.2f}% variance explained)")
+    print(f"     MAPE  : {mape:.2f}%")
+    return {"Model": name, "MAE": mae, "MSE": mse,
+            "RMSE": rmse, "R2": r2, "MAPE(%)": mape}
+
+# ── 1. Load Data ─────────────────────────────────────────────
+print("=" * 55)
+print("📥  STEP 1 — LOADING DATA")
+print("=" * 55)
+try:
+    X_train = pd.read_csv("X_train.csv")
+    X_test  = pd.read_csv("X_test.csv")
+    y_train = pd.read_csv("y_train.csv").squeeze()
+    y_test  = pd.read_csv("y_test.csv").squeeze()
+    y_pred  = pd.read_csv("y_pred_test.csv").squeeze()
+    model   = joblib.load("linear_regression_model.pkl")
+    print("  ✅ Loaded from Branch 2 & 3 artefacts.")
+    need_refit = False
+except FileNotFoundError:
+    print("  ⚠️  Upstream CSVs not found — rebuilding pipeline inline...")
+    housing = fetch_california_housing(as_frame=True)
+    df = housing.frame.copy()
+    np.random.seed(42)
+    for col in ["HouseAge", "AveRooms", "Population"]:
+        idx = np.random.choice(df.index, size=int(0.05*len(df)), replace=False)
+        df.loc[idx, col] = np.nan
+    num_cols = df.select_dtypes(include=["float64","int64"]).columns.tolist()
+    df[num_cols] = SimpleImputer(strategy="median").fit_transform(df[num_cols])
+    df["RoomsPerHousehold"]  = df["AveRooms"]  / df["HouseAge"].replace(0,np.nan)
+    df["BedroomsPerRoom"]    = df["AveBedrms"] / df["AveRooms"].replace(0,np.nan)
+    df["PopulationPerHouse"] = df["Population"]/ df["HouseAge"].replace(0,np.nan)
+    df.fillna(df.median(numeric_only=True), inplace=True)
+    X = df.drop(columns=["MedHouseVal"])
+    y = df["MedHouseVal"]
+    X_train_raw, X_test_raw, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, random_state=42)
+    scaler = StandardScaler()
+    X_train = pd.DataFrame(scaler.fit_transform(X_train_raw), columns=X.columns)
+    X_test  = pd.DataFrame(scaler.transform(X_test_raw),      columns=X.columns)
+    model = LinearRegression().fit(X_train, y_train)
+    y_pred = pd.Series(model.predict(X_test))
+    need_refit = True
+    print("  ✅ Inline pipeline complete.")
+
+# ── 2. Baseline Evaluation ───────────────────────────────────
+print("\n" + "=" * 55)
+print("📊  STEP 2 — BASELINE MODEL EVALUATION")
+print("=" * 55)
+results = []
+results.append(evaluate("Linear Regression (Baseline)", y_test, y_pred))
+
+# ── 3. (Optional) Model Improvement Techniques ───────────────
+print("\n" + "=" * 55)
+print("🚀  STEP 3 — MODEL IMPROVEMENT TECHNIQUES")
+print("=" * 55)
+
+# ── 3a. Ridge Regression ─────────────────────────────────────
+print("\n  ─── 3a. Ridge Regression (L2 Regularisation) ───")
+ridge = Ridge(alpha=1.0)
+ridge.fit(X_train, y_train)
+results.append(evaluate("Ridge (α=1.0)", y_test, ridge.predict(X_test)))
+
+# ── 3b. Lasso Regression ─────────────────────────────────────
+print("\n  ─── 3b. Lasso Regression (L1 Regularisation) ───")
+lasso = Lasso(alpha=0.01, max_iter=10000)
+lasso.fit(X_train, y_train)
+lasso_pred = lasso.predict(X_test)
+results.append(evaluate("Lasso (α=0.01)", y_test, lasso_pred))
+zeroed = np.sum(lasso.coef_ == 0)
+print(f"     Features zeroed out by Lasso: {zeroed}/{X_train.shape[1]}")
+
+# ── 3c. Polynomial Features (degree=2) ───────────────────────
+print("\n  ─── 3c. Polynomial Features (degree=2) ───")
+poly_pipeline = Pipeline([
+    ("poly",  PolynomialFeatures(degree=2, include_bias=False)),
+    ("ridge", Ridge(alpha=1.0))            # Ridge avoids overfitting
+])
+poly_pipeline.fit(X_train, y_train)
+poly_pred = poly_pipeline.predict(X_test)
+results.append(evaluate("Poly(2) + Ridge", y_test, poly_pred))
+
+# ── 3d. Ridge with Tuned Alpha ───────────────────────────────
+print("\n  ─── 3d. Ridge — Tuned α (manual grid search) ───")
+best_r2, best_alpha, best_pred = -np.inf, None, None
+for alpha in [0.001, 0.01, 0.1, 1, 10, 100]:
+    cv = cross_val_score(Ridge(alpha=alpha), X_train, y_train, cv=5, scoring="r2")
+    if cv.mean() > best_r2:
+        best_r2, best_alpha = cv.mean(), alpha
+print(f"     Best alpha found : {best_alpha}  (CV R² = {best_r2:.4f})")
+best_ridge = Ridge(alpha=best_alpha).fit(X_train, y_train)
+results.append(evaluate(f"Ridge (α={best_alpha}, tuned)", y_test,
+                         best_ridge.predict(X_test)))
+
+# ── 4. Comparison Table ──────────────────────────────────────
+print("\n" + "=" * 55)
+print("📋  STEP 4 — MODEL COMPARISON TABLE")
+print("=" * 55)
+compare_df = pd.DataFrame(results).set_index("Model").round(4)
+print(compare_df.to_string())
+
+best_model_name = compare_df["R2"].idxmax()
+print(f"\n  🏆 Best model by R²: {best_model_name}"
+      f"  (R² = {compare_df.loc[best_model_name, 'R2']:.4f})")
+
+# ── 5. Visualisations ────────────────────────────────────────
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+fig.suptitle("Model Evaluation — Performance Overview",
+             fontsize=14, fontweight="bold")
+
+models   = compare_df.index.tolist()
+palette  = ["#4A90D9", "#E74C3C", "#2ECC71", "#F39C12", "#9B59B6"]
+
+# R² bar chart
+axes[0].bar(models, compare_df["R2"], color=palette[:len(models)], edgecolor="white")
+axes[0].set_title("R² Score")
+axes[0].set_ylim(0, 1)
+axes[0].set_xticklabels(models, rotation=25, ha="right", fontsize=9)
+axes[0].axhline(1, color="gray", linestyle="--", lw=0.8)
+axes[0].grid(axis="y", linestyle="--", alpha=0.4)
+
+# RMSE bar chart
+axes[1].bar(models, compare_df["RMSE"], color=palette[:len(models)], edgecolor="white")
+axes[1].set_title("RMSE (lower = better)")
+axes[1].set_xticklabels(models, rotation=25, ha="right", fontsize=9)
+axes[1].grid(axis="y", linestyle="--", alpha=0.4)
+
+# Actual vs Predicted — best model
+best_pred_vals = poly_pred if "Poly" in best_model_name else best_ridge.predict(X_test)
+axes[2].scatter(y_test, best_pred_vals, alpha=0.3, s=10, color="#4A90D9")
+mn = min(y_test.min(), best_pred_vals.min())
+mx = max(y_test.max(), best_pred_vals.max())
+axes[2].plot([mn, mx], [mn, mx], "r--", lw=1.5)
+axes[2].set_title(f"Best Model: Actual vs Predicted\n({best_model_name})")
+axes[2].set_xlabel("Actual")
+axes[2].set_ylabel("Predicted")
+axes[2].grid(alpha=0.3)
+
+plt.tight_layout()
+plt.savefig("evaluation_comparison.png", dpi=150, bbox_inches="tight")
+print("\n💾 Saved: evaluation_comparison.png")
+
+# ── 6. Save Comparison Table ─────────────────────────────────
+compare_df.to_csv("model_comparison_results.csv")
+print("💾 Saved: model_comparison_results.csv")
+
+# ── 7. Interpretation Guide ──────────────────────────────────
+print("\n" + "=" * 55)
+print("📖  STEP 5 — METRIC INTERPRETATION GUIDE")
+print("=" * 55)
+print("""
+  MAE  (Mean Absolute Error)
+       → Average absolute difference in $100k units.
+       → Lower is better. Intuitive and robust to outliers.
+
+  MSE  (Mean Squared Error)
+       → Heavily penalises large errors. Use for training loss.
+       → Lower is better.
+
+  RMSE (Root Mean Squared Error)
+       → Same unit as target. Most commonly reported.
+       → Lower is better.
+
+  R²   (Coefficient of Determination)
+       → 1.0 = perfect fit. 0 = predicts mean only.
+       → Higher is better. Aim for ≥ 0.70 as a baseline.
+
+  MAPE (Mean Absolute Percentage Error)
+       → Percentage error; useful for business interpretation.
+       → Lower is better.
+""")
+
+print("✅ Branch 4 — Evaluation & Improvement COMPLETE")
+print("=" * 55)
+print("🎉  All 4 branches completed. Merge to main via Pull Requests!")
+print("=" * 55)
